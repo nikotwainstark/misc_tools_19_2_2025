@@ -1,11 +1,15 @@
 import matplotlib.pyplot as plt
 import time
 from tqdm import tqdm
-import pandas as pd
 import numpy as np
 import scipy
 from sklearn.decomposition import PCA
-
+import pywt
+import numpy as np
+from scipy.sparse import diags, csc_matrix
+from scipy.sparse.linalg import spsolve
+from joblib import Parallel, delayed
+from asym_pls import AsymmetricPlsEstimator
 
 class PrepLine:
     def __init__(self, data, wavn, xpx, ypx, tissue_mask):
@@ -34,6 +38,7 @@ class PrepLine:
         self.wavn = wavn
         self.xpx = xpx
         self.ypx = ypx
+        self.masked = False
         self.min2zero = False
         self.derivatised = False
         self.normalised = False
@@ -42,6 +47,28 @@ class PrepLine:
         self.band_cropped = False
         self.pca = None
         self.tissue_mask = tissue_mask
+        self.func_dict = {
+                        'polyfit_baseline_correction': {'max_iter': 10, 'tol':0.001, 'visual': True},
+                        'band_cropping': {'band_list': [1000, 1340, '', 1490, 1800],'visual': True},
+                        "normalisation": {"visual": True},
+                        "pca_denoising": {"visual": True}
+                        # "sg_deriv": {"visual":True},
+                        # "band_removing": {"ranges": [1330, 1520], "visual": True}
+                         }
+
+    def apply_mask(self, data=None, mask=None):
+        use_class_data = data is None and mask is None
+        data = self.data if data is None else data
+        mask = self.tissue_mask if mask is None else mask
+
+        data_masked = data[mask]
+
+        if use_class_data:
+            self.data = data_masked
+            self.masked = True
+
+        print("data masked")
+        return data_masked if not use_class_data else None
 
     def point_min2zero(self, data=None, wavn=None):
 
@@ -124,7 +151,7 @@ class PrepLine:
         wavn = self.wavn if wavn is None else wavn
 
         for _ in range(n_deriv):
-                data = np.gradient(data, wavn, axis=1)
+            data = np.gradient(data, wavn, axis=1)
 
         if visual:
             plt.figure()
@@ -169,7 +196,7 @@ class PrepLine:
         if visual:
             plt.figure()
             plt.plot(wavn, np.mean(denoised_data, axis=0))
-            plt.title("Denoised mean spectrum")
+            plt.title("Denoised(PCA) mean spectrum")
             plt.xlabel("Wavenumber(cm-1)")
             plt.ylabel("Absorbance")
             plt.show()
@@ -182,6 +209,171 @@ class PrepLine:
         print("PCA denoising completed")
 
         return (denoised_data, wavn) if not use_class_data else None
+
+    def wt_denoising(self, data=None, wavn=None, wavelet='sym5', level=5, threshold_scale=1, visual=False):
+        use_class_data = data is None and wavn is None
+        data = self.data if data is None else data
+        wavn = self.wavn if wavn is None else wavn
+
+        if level is None:
+            level = pywt.dwt_max_level(len(data), pywt.Wavelet(wavelet).dec_len)
+
+        coeffs = pywt.wavedec(data, wavelet, level=level)
+
+        sigma = np.median(np.abs(coeffs[-1])) / 0.6745
+        threshold = sigma * np.sqrt(2 * np.log(len(data))) * threshold_scale
+
+        new_coeffs = [coeffs[0]]
+        for detail in coeffs[1:]:
+            new_coeffs.append(pywt.threshold(detail, threshold, mode='soft'))
+
+        denoised_spectrum = pywt.waverec(new_coeffs, wavelet)
+
+        if visual:
+            plt.figure()
+            plt.plot(wavn, np.mean(denoised_spectrum[:len(data)], axis=0))
+            plt.title("Denoised(wavelet transform) mean spectrum")
+            plt.xlabel("Wavenumber(cm-1)")
+            plt.ylabel("Absorbance")
+            plt.show()
+
+        if use_class_data:
+            self.data = denoised_spectrum[:len(data)]
+            self.denoised = True
+            print("Internal data denoised")
+
+        return (denoised_spectrum[:len(data)], wavn) if not use_class_data else None
+
+    def fast_mnf_denoising(self, hyperspectraldata=None, wavn=None, SNR=5, bands=0, visual=False):
+        """
+        from Dougal's code:
+        Perform Fast Minimum Noise Fraction (MNF) denoising on hyperspectral data.
+        Code derived from supplementary information from Gupta et al:
+        https://doi.org/10.1371/journal.pone.0205219
+
+        This function reduces noise in hyperspectral images using the MNF
+        transformation. The input data `hyperspectraldata` can be 2D or 3D.
+        If the input is 3D (i.e., a hyperspectral image with spatial and
+        spectral dimensions), it will be reshaped to 2D for processing and
+        reshaped back to its original dimensions after denoising. If the input
+        is already 2D, it will be processed directly.
+
+        Steps:
+            1. Compute the difference matrix `dX` for noise estimation.
+            2. Perform eigenvalue decomposition on `dX^T * dX`.
+            3. Weight the input data by the inverse square root of the eigenvalues.
+            4. Perform eigenvalue decomposition on the weighted data.
+            5. Retain the top K components based on Rose's noise criterion.
+            If bands =/= 0, the number of components is set to bands.
+            6. Compute the transformation matrices `Phi_hat` and `Phi_tilde`.
+            7. Project the data onto MNF components and reconstruct the denoised data.
+
+        Parameters
+        ----------
+        hyperspectraldata : numpy.ndarray
+            The input hyperspectral data. Can be either a 2D array (pixels × spectral bands)
+            or a 3D array (rows × columns × spectral bands).
+
+        SNR : int
+            The signal to noise ratio value for detectability threshold outlined
+            in the Rose criterion for medical imaging signal detection theory.
+            A SNR value of 5 (default)  orivudes a 95% probability of object
+            detection by humans visually. This value can be changed under the
+            assumption this function will be used in ML applications with less
+            subjectivity.
+
+        Returns
+        -------
+        clean_data : numpy.ndarray
+            The denoised hyperspectral data. The output will have the same dimensions as the input:
+            - If the input was 3D, the output will be reshaped back to 3D.
+            - If the input was 2D, the output will remain 2D.
+
+        Raises
+        ------
+        ValueError
+            If the input array `C` is neither 2D nor 3D.
+
+        Example
+        -------
+        # >>> hyperspectraldata = np.random.rand(100, 100, 50)  # A 3D hyperspectral image
+        # >>> clean_data = fast_mnf_denoise(hyperspectraldata)
+        # >>> clean_data.shape
+        (100, 100, 50)
+        """
+
+        use_class_data = hyperspectraldata is None
+        hyperspectraldata = self.data if hyperspectraldata is None else hyperspectraldata
+        wavn = self.wavn if wavn is None else wavn
+
+        # Check if the input is 3D and reshape to 2D if needed
+        if hyperspectraldata.ndim == 3:
+            m, n, s = hyperspectraldata.shape
+            X = np.reshape(hyperspectraldata, (-1, s))  # Reshape to 2D
+        elif hyperspectraldata.ndim == 2:
+            X = hyperspectraldata
+            m, n = X.shape
+            s = n  # If already 2D, assume second dimension is the spectral dimension
+        else:
+            raise ValueError("Input C must be either 2D or 3D.")
+
+        # Step 2: Create the dX matrix
+        dX = np.zeros((m, s))
+        for i in range(m - 1):
+            dX[i, :] = X[i, :] - X[i + 1, :]
+
+        # Step 3: Perform eigenvalue decomposition of dX' * dX
+        S1, U1 = np.linalg.eigh(dX.T @ dX)
+        ix = np.argsort(S1)[::-1]  # Sort in descending order
+        U1 = U1[:, ix]
+        D1 = S1[ix]
+        diagS1 = 1.0 / np.sqrt(D1)
+
+        # Step 4: Compute weighted X
+        wX = X @ U1 @ np.diag(diagS1)
+
+        # Step 5: Perform eigenvalue decomposition of wX' * wX
+        S2, U2 = np.linalg.eigh(wX.T @ wX)
+        iy = np.argsort(S2)[::-1]  # Sort in descending order
+        U2 = U2[:, iy]
+        D2 = S2[iy]
+
+        # Step 6: Retain top K components according to input SNR threshold
+        S2_diag = D2 - 1
+        if bands !=0:
+            K = bands
+        else:
+            K = np.sum(S2_diag > SNR)
+        U2 = U2[:, :K]
+
+        # Step 7: Compute Phi_hat and Phi_tilde
+        Phi_hat = U1 @ np.diag(diagS1) @ U2
+        Phi_tilde = U1 @ np.diag(np.sqrt(D1)) @ U2
+
+        # Step 8: Project data onto MNF components and reshape to original dimensions
+        mnfX = X @ Phi_hat
+        Xhat = mnfX @ Phi_tilde.T
+
+        if hyperspectraldata.ndim == 3:
+            clean_data = np.reshape(Xhat, (m, n, s))  # Reshape back to 3D if input was 3D
+        else:
+            clean_data = Xhat  # Keep 2D if input was 2D
+
+        if visual:
+            plt.figure()
+            plt.plot(wavn, np.mean(clean_data, axis=0))
+            plt.title("Denoised(MNF) mean spectrum")
+            plt.xlabel("Wavenumber(cm-1)")
+            plt.ylabel("Absorbance")
+            plt.show()
+
+        if use_class_data:
+            self.data = clean_data
+            self.denoised = True
+            print("Internal data denoised")
+
+        print("PCA denoising completed")
+        return (clean_data, wavn) if not use_class_data else None
 
     def pca_plots(self, data=None, wavn=None, xpx=None, ypx=None, tissue_mask=None, num_plots=10, exp_var=True):
         """
@@ -223,8 +415,8 @@ class PrepLine:
 
         for i in range(numbers_of_plots):
             fig, axs = plt.subplots(nrows=1, ncols=2, figsize=(16, 10))
-            axs[0].plot(wavn, pca_loadings[i,:])
-            zeros[tissue_mask == True] = pca_scores[:, i]
+            axs[0].plot(wavn, pca_loadings[i, :])
+            zeros[tissue_mask] = pca_scores[:, i]
             axs[1].imshow(zeros.reshape(ypx, xpx), cmap="coolwarm")
             axs[0].set_title(f"scores for No.{i} PC")
             axs[1].set_title(f"loadings for No.{i} PC. Var: {pca_ex_var[i]:.2%}")
@@ -310,7 +502,7 @@ class PrepLine:
         if visual:
             plt.figure()
             plt.plot(cropped_wavn, np.mean(cropped_data, axis=0))
-            plt.title("Band keeping mean spectrum")
+            plt.title("keeping mean spectrum")
             plt.xlabel("Wavenumber(cm-1)")
             plt.ylabel("Absorbance")
             plt.show()
@@ -411,61 +603,6 @@ class PrepLine:
 
         return normalised_data if not use_class_data else None
 
-
-    # def polyfit_baseline_correction(self,
-    #                                 data=None,
-    #                                 wavn=None,
-    #                                 polyorder=3,
-    #                                 max_iter=100,
-    #                                 tol=0.01,
-    #                                 visual=False):
-    #     """
-    #     simple polynomial fitting for baseline estimation and correction
-    #     """
-    #     print("initialising polyfit baseline correction")
-    #
-    #     use_class_data = (data is None and wavn is None)
-    #     if data is None:
-    #         data = self.data
-    #     if wavn is None:
-    #         wavn = self.wavn
-    #
-    #     baseline = data.copy()
-    #
-    #     for i in range(max_iter):
-    #         coefs = np.polynomial.polynomial.polyfit(wavn, baseline.T, deg=polyorder)
-    #         fitted_curve = np.polynomial.polynomial.polyval(wavn, coefs)
-    #
-    #         mask = baseline > fitted_curve
-    #         new_baseline = np.where(mask, fitted_curve, baseline)
-    #
-    #         p = np.linalg.norm(new_baseline - baseline) / np.linalg.norm(baseline)
-    #         print(f"Iteration {i+1}, Convergence p = {p}")
-    #
-    #         if p < tol:
-    #             break
-    #
-    #         baseline = new_baseline
-    #
-    #     corrected_data = data - baseline
-    #
-    #     if use_class_data:
-    #         self.data = corrected_data
-    #         self.baseline_corrected = True
-    #
-    #     if visual:
-    #         plt.figure(figsize=(8, 5))
-    #         plt.plot(wavn, np.mean(data, axis=0), label="Original (mean)")
-    #         plt.plot(wavn, np.mean(baseline, axis=0), label="Estimated Baseline (mean)")
-    #         plt.plot(wavn, np.mean(corrected_data, axis=0), label="Corrected (mean)")
-    #         plt.title(f"Baseline-corrected spectrum (poly order={polyorder}, tol={tol})")
-    #         plt.xlabel("Wavenumber (cm⁻¹)")
-    #         plt.ylabel("Absorbance")
-    #         plt.legend()
-    #         plt.show()
-    #
-    #     return corrected_data, baseline
-
     def polyfit_baseline_correction(self,
                                     data=None,
                                     wavn=None,
@@ -496,24 +633,20 @@ class PrepLine:
 
                 p = np.linalg.norm(new_baseline - baseline) / np.linalg.norm(baseline)
 
-                # 显示当前收敛值
                 pbar.set_postfix({"Convergence": f"{p:.4f}"})
 
                 if p < tol:
-                    # 如果提前收敛，则将进度条直接更新到 100%
                     pbar.n = pbar.total
                     pbar.refresh()
                     break
 
                 baseline = new_baseline
-                pbar.update(1)  # 正常迭代进度
+                pbar.update(1)
 
-            # 如果循环是正常走完的（没有 break），在这里也把进度条更新到 100%
             if pbar.n < pbar.total:
                 pbar.n = pbar.total
                 pbar.refresh()
 
-            # 可选：暂停片刻，确保用户能看到 100% 状态（仅为视觉效果）
             time.sleep(0.2)
 
         corrected_data = data - baseline
@@ -533,50 +666,76 @@ class PrepLine:
             plt.legend()
             plt.show()
 
-        return corrected_data, baseline
+        return corrected_data, baseline if not use_class_data else None
+
+    def asym_pls_correction(self,data=None,
+                                    wavn=None,
+                                    lam=1e6,
+                                    max_iter=10,
+                                    p=0.001,
+                                    tol=1e-6,
+                                    d=2,
+                                    n_jobs=-1,
+                                    visual=False):
+
+        """
+        implement baseline correction with paralleled asymmetric partial least square baseline estimation
+        """
+        use_class_data = (data is None and wavn is None)
+        if data is None:
+            data = self.data
+        if wavn is None:
+            wavn = self.wavn
+
+        estimator = AsymmetricPlsEstimator(lam=lam, p=p, d=d, max_iter=max_iter, tol=tol, n_jobs=n_jobs)
+        baseline = estimator.asysm_parallel(data.T)
+        corrected_data = data - baseline.T
+
+        if visual:
+            plt.figure(figsize=(8, 5))
+            plt.plot(wavn, np.mean(data, axis=0), label="Original (mean)")
+            plt.plot(wavn, np.mean(baseline.T, axis=0), label="Estimated Baseline (mean)")
+            plt.plot(wavn, np.mean(corrected_data, axis=0), label="Corrected (mean)")
+            plt.title(f"Asymmetric PLS Baseline-corrected spectrum (maxiter={max_iter}, tol={tol})")
+            plt.xlabel("Wavenumber (cm⁻¹)")
+            plt.ylabel("Absorbance")
+            plt.legend()
+            plt.show()
+
+        print("complete asymmetric PLS baseline correction!")
+        return corrected_data, baseline if not use_class_data else None
 
     def customised_pipeline(self, pipeline_dict, should_return=True):
-        """
-        根据用户给定的字典执行预处理流程，
-        字典的键为函数名称，值为该函数所需的参数字典。
-
-        例如：
-        pipeline_dict = {
-            "smooth": {"window": 7},
-            "normalize": {"method": "z-score"},
-            "baseline_correction": {"polyorder": 4}
-        }
-        """
-        print("Initialising preprocessing pipeline....\n")
-        count=1
-
         for func_name, params in pipeline_dict.items():
             if hasattr(self, func_name):
                 func = getattr(self, func_name)
                 if callable(func):
-                    print(f"Step {count}: Executing {func_name} with parameters '{params}' ... \n")
-                    if params is None:
-                        func()
-                    else:
+                    print(f"Executing {func_name} with parameters: {params}")
+                    if params:
                         func(**params)
+                    else:
+                        func()
                 else:
-                    print(f"{func_name} not a callable object！")
+                    print(f"{func_name} not callable")
             else:
-                print(f"Warning: {func_name} 在 spectra_prep.PrepLine 中不存在！")
-            print("\n----------------------------------------------------------\n")
-            count += 1
-        print("Preprocess sequence completed")
-        if should_return:
-            return self.data, self.wavn
+                print(f"Warning: {func_name} not in PrepLine!")
+        return self.data, self.wavn if should_return else None
 
     def fast_pipeline(self, should_return=True):
-        func_dict = {"pca_denoising": {"visual": True},
-                     "polyfit_baseline_correction": {"max_iter":10, "visual": True},
-                     "band_cropping": {"visual": True},
-                     "normalisation": {"visual": True},
-                     "sg_deriv": {"visual":True},
-                     "band_removing": {"ranges": [1330, 1520], "visual": True}}
-        self.customised_pipeline(func_dict, should_return)
+
+        self.customised_pipeline(self.func_dict, should_return)
+
+    @staticmethod
+    def print_pipeline_example():
+        func_dict = {
+                        'polyfit_baseline_correction': {'max_iter': 10, 'tol':0.001, 'visual': True},
+                        'band_cropping': {'band_list': [1000, 1340, '', 1490, 1800],'visual': True},
+                        "normalisation": {"visual": True},
+                        "pca_denoising": {"visual": True},
+                        "sg_deriv": {"visual":True},
+                        "band_removing": {"ranges": [1330, 1520], "visual": True}
+        }
+        print(func_dict)
 
     def plot_mean_spectrum(self, data=None, wavn=None):
         use_class_data = (data is None and wavn is None)
@@ -592,9 +751,34 @@ class PrepLine:
         plt.ylabel("Absorbance")
         plt.show()
 
+    def rebulid_img_data(self, data=None, xpx=None, ypx=None, tissue_mask=None, visual=True):
+        """
+        reshape 2d spectrum to a 3D image
+        """
 
+        if data is None:
+            data = self.data
+        if xpx is None:
+            xpx = self.xpx
+        if ypx is None:
+            ypx = self.ypx
+        if tissue_mask is None:
+            tissue_mask = self.tissue_mask
 
+        zeros = np.zeros(ypx * xpx)
+        zeros[tissue_mask] = data
+        img = zeros.reshape((ypx, xpx))
 
+        if visual:
+            plt.figure()
+            plt.imshow(img)
+            plt.show()
+
+        return img
+
+    def rebuild_spectra_data(self,tissue_data=None, wavn=None,xpx=None, ypx=None, tissue_mask=None):
+        zero = np.zeros((xpx*ypx, wavn.shape[0]))
+        zero[tissue_mask] = tissue_data
 
     # reload(spectra_prep)test = spectra_prep.PrepLine(tile.data, tile.wavenumbers, tile.xpixels, tile.ypixels, tissue_mask=tissue_mask)
     #

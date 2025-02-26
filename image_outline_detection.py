@@ -10,11 +10,11 @@ from matplotlib.widgets import Slider
 module_path = r"C:\GitHub\new pyir\PyIR\src"
 if module_path not in sys.path:
     sys.path.append(module_path)
-sub_path = "C:/PythonProjects/PhD Project/GitHub_test"
+sub_path = "C:\PythonProjects\PhD Project\Haolin's repository\misc_tools_19_2_2025"
 sys.path.append(sub_path)
 import smartimage
 from pyir_spectralcollection import PyIR_SpectralCollection
-path = "Z:/Masters and UG Projects/2021-2022/Dilara and Amelia/PR484_C051/PR484_C051_e1/PR484_c051_e1.dmt"
+path = "Z:\\Group Members\\Anna Zetterstrom [t75307az]\\Colorectal\\Colorectal\\R1C4_to_R2C6\\r1c4_to_r2c6.dmt"
 tile = PyIR_SpectralCollection(path)
 tile.is_loaded()
 
@@ -31,14 +31,14 @@ image_rebulid = np.zeros_like(tile.data[:,:tissue_data.shape[1]])
 image_rebulid[tissue_mask, :] = tissue_data
 
 
-# test_difference_column = image_rebulid.reshape(tile.ypixels, tile.xpixels,-1)[:-1,:,:] - image_rebulid.reshape(tile.ypixels, tile.xpixels,-1)[1:,:,:]
-# plt.figure()
-# plt.imshow(np.abs(test_difference_column[:,:,325].reshape(tile.ypixels-1,tile.xpixels))>0.05)
-# plt.show()
-# test_difference_row = image_rebulid.reshape(tile.ypixels, tile.xpixels,-1)[:,:-1,:] - image_rebulid.reshape(tile.ypixels, tile.xpixels,-1)[:,1:,:]
-# plt.figure()
-# plt.imshow(np.abs(test_difference_row[:,:,325].reshape(tile.ypixels,tile.xpixels-1))>0.05)
-# plt.show()
+test_difference_column = image_rebulid.reshape(tile.ypixels, tile.xpixels,-1)[:-1,:,:] - image_rebulid.reshape(tile.ypixels, tile.xpixels,-1)[1:,:,:]
+plt.figure()
+plt.imshow(np.abs(test_difference_column[:,:,325].reshape(tile.ypixels-1,tile.xpixels))>0.05)
+plt.show()
+test_difference_row = image_rebulid.reshape(tile.ypixels, tile.xpixels,-1)[:,:-1,:] - image_rebulid.reshape(tile.ypixels, tile.xpixels,-1)[:,1:,:]
+plt.figure()
+plt.imshow(np.abs(test_difference_row[:,:,325].reshape(tile.ypixels,tile.xpixels-1))>0.05)
+plt.show()
 
 
 img = tissue_mask.reshape(tile.ypixels, tile.xpixels)
@@ -47,9 +47,9 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 
-plt.imsave('image.png', img)
+plt.imsave('C:\\tissue_outline test\\image.png', img)
 
-image_path = 'image.png'
+image_path = 'C:\\tissue_outline test\\image.png'
 image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
 
 blurred = cv2.GaussianBlur(image, (3, 3), 0)
@@ -59,9 +59,9 @@ edges = cv2.Canny(blurred, 20, 150)
 kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
 closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel)
 
-plt.figure()
-plt.imshow(edges.reshape(tile.ypixels, tile.xpixels))
-plt.show()
+# plt.figure()
+# plt.imshow(edges.reshape(tile.ypixels, tile.xpixels))
+# plt.show()
 
 contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
@@ -150,10 +150,10 @@ else:
 common_pixels = cv2.bitwise_and(tissue_mask.reshape(tile.ypixels, tile.xpixels).astype(np.uint8), mask.astype(np.uint8))
 
 fig, ax = plt.subplots(1, 4)
-ax[0].imshow(tissue_mask.reshape(tile.ypixels, tile.xpixels), cmap='gray')
-ax[0].set_title('Original tissue mask')
-ax[1].imshow(mask, cmap='gray')
-ax[1].set_title('Tissue segment mask')
+# ax[0].imshow(tissue_mask.reshape(14816, 14749), cmap='gray')
+# ax[0].set_title('Original tissue mask')
+# ax[1].imshow(mask, cmap='gray')
+# ax[1].set_title('Tissue segment mask')
 ax[2].imshow(outline_mask, cmap='gray')
 ax[2].set_title('Tissue outline mask')
 ax[3].imshow(common_pixels, cmap='gray')
