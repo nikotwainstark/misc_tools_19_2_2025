@@ -1,15 +1,23 @@
 import matplotlib.pyplot as plt
 import time
 from tqdm import tqdm
-import numpy as np
 import scipy
 from sklearn.decomposition import PCA
 import pywt
 import numpy as np
-from scipy.sparse import diags, csc_matrix
-from scipy.sparse.linalg import spsolve
-from joblib import Parallel, delayed
-from asym_pls import AsymmetricPlsEstimator
+import asym_pls
+from smartimage import SmartImage
+import air_pls
+import h5py
+import sys
+
+sys.path.append("C:\\PythonProjects\\PhD Project\\GitHub\\new pyir\PyIR\src")
+from pyir_spectralcollection import PyIR_SpectralCollection
+from importlib import reload
+
+reload(asym_pls)
+reload(air_pls)
+
 
 class PrepLine:
     def __init__(self, data, wavn, xpx, ypx, tissue_mask):
@@ -44,17 +52,18 @@ class PrepLine:
         self.normalised = False
         self.denoised = False
         self.baseline_corrected = False
+        self.band_lst = [900, 1350, "", 1490, 1800]
         self.band_cropped = False
         self.pca = None
         self.tissue_mask = tissue_mask
         self.func_dict = {
-                        'polyfit_baseline_correction': {'max_iter': 10, 'tol':0.001, 'visual': True},
-                        'band_cropping': {'band_list': [1000, 1340, '', 1490, 1800],'visual': True},
-                        "normalisation": {"visual": True},
-                        "pca_denoising": {"visual": True}
-                        # "sg_deriv": {"visual":True},
-                        # "band_removing": {"ranges": [1330, 1520], "visual": True}
-                         }
+            'polyfit_baseline_correction': {'max_iter': 10, 'tol': 0.001, 'visual': True},
+            'band_cropping': {'band_list': [1000, 1340, '', 1490, 1800], 'visual': True},
+            "normalisation": {"visual": True},
+            "pca_denoising": {"visual": True}
+            # "sg_deriv": {"visual":True},
+            # "band_removing": {"ranges": [1330, 1520], "visual": True}
+        }
 
     def apply_mask(self, data=None, mask=None):
         use_class_data = data is None and mask is None
@@ -93,7 +102,7 @@ class PrepLine:
 
         for row in range(data.shape[0]):
             minimum = np.min(data[row, :])
-            data[row, ] = data - minimum
+            data[row,] = data - minimum
         if use_class_data:
             self.min2zero = True
             self.data = data
@@ -340,7 +349,7 @@ class PrepLine:
 
         # Step 6: Retain top K components according to input SNR threshold
         S2_diag = D2 - 1
-        if bands !=0:
+        if bands != 0:
             K = bands
         else:
             K = np.sum(S2_diag > SNR)
@@ -411,7 +420,7 @@ class PrepLine:
 
         numbers_of_plots = min(num_plots, pca.components_.shape[0])
 
-        zeros = np.zeros(xpx*ypx)
+        zeros = np.zeros(xpx * ypx)
 
         for i in range(numbers_of_plots):
             fig, axs = plt.subplots(nrows=1, ncols=2, figsize=(16, 10))
@@ -448,8 +457,8 @@ class PrepLine:
 
         if isinstance(ranges, list):
             if len(ranges) == 2:
-                lower_idx = np.argmin(np.abs(wavn-np.min(ranges)))
-                upper_idx = np.argmin(np.abs(wavn-np.max(ranges)))
+                lower_idx = np.argmin(np.abs(wavn - np.min(ranges)))
+                upper_idx = np.argmin(np.abs(wavn - np.max(ranges)))
                 cropped_wavn = wavn[lower_idx:upper_idx]
                 cropped_data = data[:, lower_idx:upper_idx]
             else:
@@ -509,12 +518,13 @@ class PrepLine:
 
         return (cropped_data, cropped_wavn) if not use_class_data else None
 
-    def band_cropping(self, band_list=[900, 1350, "", 1490, 1800], data=None, wavn=None, visual=False):
+    def band_cropping(self, band_list=None, data=None, wavn=None, visual=False):
         """
         band cropping given user input list. "" in list means cropping the region.
         example: [1200, 1350, "", 1490, 1800]
         """
-        use_class_data = data is None and wavn is None
+        use_class_data = data is None and wavn is None and band_list is None
+        band_list = self.band_lst
         data = self.data if data is None else data
         wavn = self.wavn if wavn is None else wavn
 
@@ -533,7 +543,8 @@ class PrepLine:
                 upper = band_list[i + 1]
 
                 print(f"Removing range: {lower}-{upper}")
-                cropped_data, cropped_wavn = self.band_removing([lower, upper], cropped_data, cropped_wavn, visual=False)
+                cropped_data, cropped_wavn = self.band_removing([lower, upper], cropped_data, cropped_wavn,
+                                                                visual=False)
 
         if use_class_data:
             self.data = cropped_data
@@ -647,14 +658,7 @@ class PrepLine:
                 pbar.n = pbar.total
                 pbar.refresh()
 
-            time.sleep(0.2)
-
         corrected_data = data - baseline
-
-        if use_class_data:
-            self.data = corrected_data
-            self.baseline_corrected = True
-
         if visual:
             plt.figure(figsize=(8, 5))
             plt.plot(wavn, np.mean(data, axis=0), label="Original (mean)")
@@ -666,17 +670,24 @@ class PrepLine:
             plt.legend()
             plt.show()
 
+        if use_class_data:
+            self.data = corrected_data
+            self.baseline_corrected = True
+
+        print('complete polynomial fitting baseline correction!')
+
         return corrected_data, baseline if not use_class_data else None
 
-    def asym_pls_correction(self,data=None,
-                                    wavn=None,
-                                    lam=1e6,
-                                    max_iter=10,
-                                    p=0.001,
-                                    tol=1e-6,
-                                    d=2,
-                                    n_jobs=-1,
-                                    visual=False):
+    def asym_pls_correction(self, data=None,
+                            wavn=None,
+                            lam=1e6,
+                            max_iter=10,
+                            p=0.001,
+                            tol=1e-6,
+                            d=2,
+                            n_jobs=-1,
+                            visual=False
+                            ):
 
         """
         implement baseline correction with paralleled asymmetric partial least square baseline estimation
@@ -687,7 +698,7 @@ class PrepLine:
         if wavn is None:
             wavn = self.wavn
 
-        estimator = AsymmetricPlsEstimator(lam=lam, p=p, d=d, max_iter=max_iter, tol=tol, n_jobs=n_jobs)
+        estimator = asym_pls.AsymmetricPlsEstimator(lam=lam, p=p, d=d, max_iter=max_iter, tol=tol, n_jobs=n_jobs)
         baseline = estimator.asysm_parallel(data.T)
         corrected_data = data - baseline.T
 
@@ -702,8 +713,48 @@ class PrepLine:
             plt.legend()
             plt.show()
 
-        print("complete asymmetric PLS baseline correction!")
-        return corrected_data, baseline if not use_class_data else None
+        if use_class_data:
+            self.data = corrected_data
+            self.baseline_corrected = True
+
+        print("complete Asymmetric PLS baseline correction!")
+        return (corrected_data, baseline) if not use_class_data else None
+
+    def airpls_correction(self, data=None,
+                          wavn=None,
+                          lam=200,
+                          max_iter=300,
+                          porder=1,
+                          n_jobs=-1,
+                          visual=False):
+        use_class_data = (data is None and wavn is None)
+        if data is None:
+            data = self.data
+        if wavn is None:
+            wavn = self.wavn
+
+        estimator = air_pls.AirPLSEstimator(data.T, lam, porder, max_iter, n_jobs)
+        baseline = estimator.airPLS_parallel()
+        corrected_data = data - baseline.T
+        print(corrected_data.shape)
+
+        if visual:
+            plt.figure(figsize=(8, 5))
+            plt.plot(wavn, np.mean(data, axis=0), label="Original (mean)")
+            plt.plot(wavn, np.mean(baseline.T, axis=0), label="Estimated Baseline (mean)")
+            plt.plot(wavn, np.mean(corrected_data, axis=0), label="Corrected (mean)")
+            plt.title(f"AirPLS Baseline-corrected spectrum (maxiter={max_iter},lam={lam}, p order={porder})")
+            plt.xlabel("Wavenumber (cm⁻¹)")
+            plt.ylabel("Absorbance")
+            plt.legend()
+            plt.show()
+
+        if use_class_data:
+            self.data = corrected_data
+            self.baseline_corrected = True
+
+        print("complete AirPLS baseline correction!")
+        return (corrected_data, baseline) if not use_class_data else None
 
     def customised_pipeline(self, pipeline_dict, should_return=True):
         for func_name, params in pipeline_dict.items():
@@ -728,17 +779,16 @@ class PrepLine:
     @staticmethod
     def print_pipeline_example():
         func_dict = {
-                        'polyfit_baseline_correction': {'max_iter': 10, 'tol':0.001, 'visual': True},
-                        'band_cropping': {'band_list': [1000, 1340, '', 1490, 1800],'visual': True},
-                        "normalisation": {"visual": True},
-                        "pca_denoising": {"visual": True},
-                        "sg_deriv": {"visual":True},
-                        "band_removing": {"ranges": [1330, 1520], "visual": True}
+            'polyfit_baseline_correction': {'max_iter': 10, 'tol': 0.001, 'visual': True},
+            'band_cropping': {'band_list': [1000, 1340, '', 1490, 1800], 'visual': True},
+            "normalisation": {"visual": True},
+            "pca_denoising": {"visual": True},
+            "sg_deriv": {"visual": True},
+            "band_removing": {"ranges": [1330, 1520], "visual": True}
         }
         print(func_dict)
 
     def plot_mean_spectrum(self, data=None, wavn=None):
-        use_class_data = (data is None and wavn is None)
         if data is None:
             data = self.data
         if wavn is None:
@@ -765,9 +815,9 @@ class PrepLine:
         if tissue_mask is None:
             tissue_mask = self.tissue_mask
 
-        zeros = np.zeros(ypx * xpx)
-        zeros[tissue_mask] = data
-        img = zeros.reshape((ypx, xpx))
+        zero = np.zeros(ypx * xpx)
+        zero[tissue_mask] = data
+        img = zero.reshape((ypx, xpx))
 
         if visual:
             plt.figure()
@@ -776,25 +826,39 @@ class PrepLine:
 
         return img
 
-    def rebuild_spectra_data(self,tissue_data=None, wavn=None,xpx=None, ypx=None, tissue_mask=None):
-        zero = np.zeros((xpx*ypx, wavn.shape[0]))
+    def rebuild_spectra_data(self, tissue_data=None, wavn=None, xpx=None, ypx=None, tissue_mask=None, clickon=True):
+        if tissue_data is None:
+            tissue_data = self.data
+        if xpx is None:
+            xpx = self.xpx
+        if ypx is None:
+            ypx = self.ypx
+        if tissue_mask is None:
+            tissue_mask = self.tissue_mask
+
+        zero = np.zeros((xpx * ypx, wavn.shape[0]))
         zero[tissue_mask] = tissue_data
 
+        if clickon:
+            tile = PyIR_SpectralCollection()
+            tile.data = zero
+            tile.wavenumbers = wavn
+            tile.xpixels = xpx
+            tile.ypixels = ypx
+            si = SmartImage(tile)
+            si.clickon()
+
+        return zero
+
+    def save2hdf5(self, data=None, wavn=None):
+        use_class_data = (data is None and wavn is None)
+        if data is None:
+            data = self.data
+        if wavn is None:
+            wavn = self.wavn
+
     # reload(spectra_prep)test = spectra_prep.PrepLine(tile.data, tile.wavenumbers, tile.xpixels, tile.ypixels, tissue_mask=tissue_mask)
-    #
-
-
-    # def mnf_denoising
     # def emsc_baseline_correction
     # def mie_extinction_correction
     # def spectra_make_annotation
     # def default_spectra_prepline
-
-
-
-
-
-
-
-
-
