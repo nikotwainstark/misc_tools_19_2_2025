@@ -8,6 +8,8 @@ from tqdm import tqdm
 class AsymmetricPlsEstimator:
     def __init__(self, lam=1e6, p=0.001, d=2, max_iter=50, tol=1e-6, n_jobs=-1):
         """
+        From Dr Alex Henderson's ChiToolBox
+
         Params
           lam     : smoothing factor (normally 1e5 to 1e8)
           p       : asymmetric factor (default 0.001)
@@ -26,6 +28,9 @@ class AsymmetricPlsEstimator:
     def _difference_matrix(self, m):
         """
         construction difference matrix
+
+        Param
+            m: number of columns
         """
         D = np.diff(np.eye(m), n=self.d, axis=0)
         return csc_matrix(D)
@@ -56,6 +61,12 @@ class AsymmetricPlsEstimator:
     def asysm_parallel(self, y):
         """
         parallel version of asymmetric pls baseline estimation
+
+        Param
+            y: input data, 2D numpy array. shape:(n_points, n_spectrum)
+
+        output
+            z: asymmertic PLS fitted baseline shape: (n_points, n_spectra)
         """
         y = np.asarray(y)
         # 1D array
@@ -73,3 +84,10 @@ class AsymmetricPlsEstimator:
         else:
             raise ValueError("data should be 1d or 2d numpy array")
 
+# example
+# if __name__ == '__main__':
+#     np.random.seed(0)
+#     X = np.random.rand(1506, 10000) # input should be (n_points, n_spectrum)
+#     estimator = AsymmetricPlsEstimator()
+#     baseline = estimator.asysm_parallel(X)
+#     print(f"Baseline fitting complete, shape:{baseline.shape}")

@@ -89,7 +89,7 @@ class Dataloader:
         print("completed")
         return tile
 
-
+    def random_sampling_by_class(self):
 
 
 

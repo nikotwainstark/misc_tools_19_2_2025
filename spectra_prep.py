@@ -803,7 +803,7 @@ class PrepLine:
 
     def rebulid_img_data(self, data=None, xpx=None, ypx=None, tissue_mask=None, visual=True):
         """
-        reshape 2d spectrum to a 3D image
+        reshape 2d spectrum to a 3D, one channel image. Input should be a 2D numpy array.
         """
 
         if data is None:
@@ -827,6 +827,10 @@ class PrepLine:
         return img
 
     def rebuild_spectra_data(self, tissue_data=None, wavn=None, xpx=None, ypx=None, tissue_mask=None, clickon=True):
+        """
+        rebuild tissue's hyperspectral data (in 2D format) according to given pixel sizes and tissue mask. Leaving only
+        tissue data, with wax contents are [0,0,0....0] array
+        """
         if tissue_data is None:
             tissue_data = self.data
         if xpx is None:

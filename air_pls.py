@@ -12,12 +12,12 @@ class AirPLSEstimator:
         https://doi.org/10.1039/b922045c
 
         Params
-          lam     : smoothing factor (normally 1e5 to 1e8)
-          p       : asymmetric factor (default 0.001)
-          d       : difference matrix rank (default 2)
+          lam: smoothing factor (normally 1e5 to 1e8)
+          p: asymmetric factor (default 0.001)
+          d: difference matrix rank (default 2)
           max_iter: max iteration
-          tol     : tolerance of convergence
-          n_jobs  : maximum cores for parallel calculartion
+          tol: tolerance of convergence
+          n_jobs: maximum cores for parallel calculation
         """
         self.X = data
         self.lam = lam
@@ -30,8 +30,8 @@ class AirPLSEstimator:
         '''
         Penalized least squares algorithm for background fitting
 
-        input
-            x: input data (i.e. chromatogram or spectrum)
+        Params
+            x: input data (i.e. spectrum)
             w: binary masks (value is 0 if a point belongs to peaks and 1 otherwise)
             lambda_: smoothing parameter; larger lambda produces smoother background
             differences: order of the difference (penalty order)
@@ -55,7 +55,7 @@ class AirPLSEstimator:
         '''
         Adaptive iteratively reweighted penalized least squares for baseline fitting
 
-        input
+        Params
             x: input data (1D numpy array representing a spectrum)
             lambda_: smoothing parameter; larger lambda produces smoother baseline
             porder: order of the difference (penalty order)
@@ -130,6 +130,7 @@ class AirPLSEstimator:
 # example
 # if __name__ == '__main__':
 #     np.random.seed(0)
-#     X = np.random.rand(1506, 10000)
-#     baseline = airPLS_parallel(X, lambda_=100, porder=1, itermax=15, n_jobs=-1)
+#     X = np.random.rand(1506, 10000)  # input should be (n_points, n_spectrum)
+#     estimator = AirPLSEstimator()
+#     baseline = estimator.airPLS_parallel(X)
 #     print(f"Baseline fitting complete, shape:{baseline.shape}")
