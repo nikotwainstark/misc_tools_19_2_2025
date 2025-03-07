@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 from matplotlib.widgets import Cursor
 import ipywidgets as widgets
 from IPython.display import display
+import cv2
 
 
 class SmartImage:
@@ -352,6 +353,23 @@ class SmartImage:
                 new_tile.wavenumbers = self.wavenumbers
                 return new_tile
 
+    def export2greyimg(self, save_path):
+        """
+        export 1600-1700 amide-i area value of Pyircollection image
+        """
+        area_data = self.tile.area_between(1600, 1700, self.tile.data, self.tile.wavenumbers)
+        min_val = np.min(area_data)
+        max_val = np.max(area_data)
+
+        normalised_data = (area_data-min_val)/(max_val - min_val)
+        grey_data = (normalised_data * 255).astype(np.uint8)
+
+        success = cv2.imwrite(save_path, grey_data.reshape(self.tile.ypixels, self.tile.xpixels))
+
+        if success:
+            print(f'grey image saved at {save_path}')
+        else:
+            print(f'grey image not saved')
 
 class MaskEditor:
 

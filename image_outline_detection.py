@@ -33,11 +33,11 @@ image_rebulid[tissue_mask, :] = tissue_data
 
 test_difference_column = image_rebulid.reshape(tile.ypixels, tile.xpixels,-1)[:-1,:,:] - image_rebulid.reshape(tile.ypixels, tile.xpixels,-1)[1:,:,:]
 plt.figure()
-plt.imshow(np.abs(test_difference_column[:,:,325].reshape(tile.ypixels-1,tile.xpixels))>0.05)
+plt.imshow(np.abs(test_difference_column[:,:,235].reshape(tile.ypixels-1,tile.xpixels))>0.05)
 plt.show()
 test_difference_row = image_rebulid.reshape(tile.ypixels, tile.xpixels,-1)[:,:-1,:] - image_rebulid.reshape(tile.ypixels, tile.xpixels,-1)[:,1:,:]
 plt.figure()
-plt.imshow(np.abs(test_difference_row[:,:,325].reshape(tile.ypixels,tile.xpixels-1))>0.05)
+plt.imshow(np.abs(test_difference_row[:,:,235].reshape(tile.ypixels,tile.xpixels-1))>0.05)
 plt.show()
 
 

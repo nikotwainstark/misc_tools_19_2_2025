@@ -1,5 +1,7 @@
 import matplotlib.pyplot as plt
 import time
+
+import pandas as pd
 from tqdm import tqdm
 import scipy
 from sklearn.decomposition import PCA
@@ -25,8 +27,13 @@ class PrepLine:
         if not isinstance(wavn, np.ndarray) or wavn.ndim != 1:
             raise ValueError("wavn must be a 1D numpy array")
 
+        if isinstance(data, pd.DataFrame):
+            print("converting DataFrame data into numpy array")
+            data = data.values
+            print("converted into numpy array")
+
         if not isinstance(data, np.ndarray):
-            raise ValueError("data must be a numpy array")
+            print("data must be a numpy array")
 
         if data is not None and len(data.shape) == 3:
             print("\ndata must be a 2D numpy array, reshaping data now...\n")
@@ -52,17 +59,17 @@ class PrepLine:
         self.normalised = False
         self.denoised = False
         self.baseline_corrected = False
-        self.band_lst = [900, 1350, "", 1490, 1800]
+        self.band_lst = [1000, 1350, "", 1490, 1800]
         self.band_cropped = False
         self.pca = None
         self.tissue_mask = tissue_mask
         self.func_dict = {
-            'polyfit_baseline_correction': {'max_iter': 10, 'tol': 0.001, 'visual': True},
-            'band_cropping': {'band_list': [1000, 1340, '', 1490, 1800], 'visual': True},
+            'airpls_correction': {'visual': True},
+            'band_cropping': {'visual': True},
             "normalisation": {"visual": True},
-            "pca_denoising": {"visual": True}
-            # "sg_deriv": {"visual":True},
-            # "band_removing": {"ranges": [1330, 1520], "visual": True}
+            "pca_denoising": {"visual": True},
+            "sg_deriv": {"visual": True},
+            "band_removing": {"ranges": [1345, 1495], "visual": True}
         }
 
     def apply_mask(self, data=None, mask=None):
@@ -225,35 +232,37 @@ class PrepLine:
         wavn = self.wavn if wavn is None else wavn
 
         if level is None:
-            level = pywt.dwt_max_level(len(data), pywt.Wavelet(wavelet).dec_len)
+            level = pywt.dwt_max_level(data.shape[1], pywt.Wavelet(wavelet).dec_len)
 
         coeffs = pywt.wavedec(data, wavelet, level=level)
 
         sigma = np.median(np.abs(coeffs[-1])) / 0.6745
-        threshold = sigma * np.sqrt(2 * np.log(len(data))) * threshold_scale
+        threshold = sigma * np.sqrt(2 * np.log(data.shape[1])) * threshold_scale
 
         new_coeffs = [coeffs[0]]
         for detail in coeffs[1:]:
             new_coeffs.append(pywt.threshold(detail, threshold, mode='soft'))
 
         denoised_spectrum = pywt.waverec(new_coeffs, wavelet)
-
+        print(f'denoised shape: {denoised_spectrum.shape}')
+        print(f"cutted_data_shape: {denoised_spectrum[:, :data.shape[1]].shape}")
+        print(f"wavn shape {wavn.shape}")
         if visual:
             plt.figure()
-            plt.plot(wavn, np.mean(denoised_spectrum[:len(data)], axis=0))
+            plt.plot(wavn, np.mean(denoised_spectrum[:, :data.shape[1]], axis=0))
             plt.title("Denoised(wavelet transform) mean spectrum")
             plt.xlabel("Wavenumber(cm-1)")
             plt.ylabel("Absorbance")
             plt.show()
 
         if use_class_data:
-            self.data = denoised_spectrum[:len(data)]
+            self.data = denoised_spectrum[:, :data.shape[1]]
             self.denoised = True
             print("Internal data denoised")
 
-        return (denoised_spectrum[:len(data)], wavn) if not use_class_data else None
+        return (denoised_spectrum[:, :data.shape[1]], wavn) if not use_class_data else None
 
-    def fast_mnf_denoising(self, hyperspectraldata=None, wavn=None, SNR=5, bands=0, visual=False):
+    def fast_mnf_denoising(self, hyperspectraldata=None, wavn=None, SNR=5, bands=100, visual=False):
         """
         from Dougal's code:
         Perform Fast Minimum Noise Fraction (MNF) denoising on hyperspectral data.
@@ -523,8 +532,8 @@ class PrepLine:
         band cropping given user input list. "" in list means cropping the region.
         example: [1200, 1350, "", 1490, 1800]
         """
-        use_class_data = data is None and wavn is None and band_list is None
-        band_list = self.band_lst
+        use_class_data = data is None and wavn is None
+        band_list = self.band_lst if band_list is None else band_list
         data = self.data if data is None else data
         wavn = self.wavn if wavn is None else wavn
 
@@ -573,7 +582,7 @@ class PrepLine:
         data = self.data if data is None else data
         wavn = self.wavn if wavn is None else wavn
 
-        norms, ref_values = None, None
+        ref_values = None
 
         if norm == "vector":
             norms = np.linalg.norm(data, axis=1, keepdims=True)
@@ -692,11 +701,9 @@ class PrepLine:
         """
         implement baseline correction with paralleled asymmetric partial least square baseline estimation
         """
-        use_class_data = (data is None and wavn is None)
-        if data is None:
-            data = self.data
-        if wavn is None:
-            wavn = self.wavn
+        use_class_data = data is None and wavn is None
+        data = self.data if data is None else data
+        wavn = self.wavn if wavn is None else wavn
 
         estimator = asym_pls.AsymmetricPlsEstimator(lam=lam, p=p, d=d, max_iter=max_iter, tol=tol, n_jobs=n_jobs)
         baseline = estimator.asysm_parallel(data.T)
@@ -727,11 +734,10 @@ class PrepLine:
                           porder=1,
                           n_jobs=-1,
                           visual=False):
-        use_class_data = (data is None and wavn is None)
-        if data is None:
-            data = self.data
-        if wavn is None:
-            wavn = self.wavn
+
+        use_class_data = data is None and wavn is None
+        data = self.data if data is None else data
+        wavn = self.wavn if wavn is None else wavn
 
         estimator = air_pls.AirPLSEstimator(data.T, lam, porder, max_iter, n_jobs)
         baseline = estimator.airPLS_parallel()
