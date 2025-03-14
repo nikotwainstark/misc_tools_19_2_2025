@@ -390,7 +390,7 @@ class PrepLine:
             self.denoised = True
             print("Internal data denoised")
 
-        print("PCA denoising completed")
+        print("MNF denoising completed")
         return (clean_data, wavn) if not use_class_data else None
 
     def pca_plots(self, data=None, wavn=None, xpx=None, ypx=None, tissue_mask=None, num_plots=10, exp_var=True):
@@ -776,7 +776,7 @@ class PrepLine:
                     print(f"{func_name} not callable")
             else:
                 print(f"Warning: {func_name} not in PrepLine!")
-        return self.data, self.wavn if should_return else None
+        return (self.data, self.wavn) if should_return else None
 
     def fast_pipeline(self, should_return=True):
 

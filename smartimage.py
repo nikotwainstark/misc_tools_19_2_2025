@@ -13,6 +13,7 @@ from matplotlib.widgets import Cursor
 import ipywidgets as widgets
 from IPython.display import display
 import cv2
+import os
 
 
 class SmartImage:
@@ -39,7 +40,7 @@ class SmartImage:
             data = self.tile.reshaper_3D(
                 data, [self.tile.ypixels, self.tile.xpixels, -1]
             )
-        sub_data = data[fstp[1] : secp[1], fstp[0] : secp[0], :]
+        sub_data = data[fstp[1]: secp[1], fstp[0]: secp[0], :]
         ndims, sub_2d_data = self.tile.reshaper_3D(sub_data)
 
         tile_sub = PyIR_SpectralCollection()
@@ -74,7 +75,7 @@ class SmartImage:
         fig, (ax_image, ax_curve) = plt.subplots(2, 1, figsize=(8, 12))
         plt.subplots_adjust(bottom=0.2)
         ax_image.imshow(image_data, cmap="grey"
-                        , extent=[0, xpixels, ypixels, 0 ]
+                        , extent=[0, xpixels, ypixels, 0]
                         )
 
         (line,) = ax_curve.plot([], [])
@@ -148,7 +149,7 @@ class SmartImage:
         return new_df
 
     def show_spectra_collection(
-        self, data=None, highlight=False, mean=False, flip=False, label=False
+            self, data=None, highlight=False, mean=False, flip=False, label=False
     ):
         """
         Show spectra plot of the spectra data (Default: attribute: spectra_collection) with highlighted wavenumbers.
@@ -228,8 +229,6 @@ class SmartImage:
         if label:
             plt.legend()
         plt.show()
-
-
 
     def export2mat(self, file_path, data=None, wavenumbers=None):
         """
@@ -353,23 +352,53 @@ class SmartImage:
                 new_tile.wavenumbers = self.wavenumbers
                 return new_tile
 
-    def export2greyimg(self, save_path):
+    def export2img(self, data, save_path, if_grey=True):
         """
-        export 1600-1700 amide-i area value of Pyircollection image
+        Export a numpy array (1-D) to a proper sized image.
+        If if_grey is True, return a grey scale image.
+        If if_grey is False, return a color image (e.g., for kmeans labels).
         """
-        area_data = self.tile.area_between(1600, 1700, self.tile.data, self.tile.wavenumbers)
-        min_val = np.min(area_data)
-        max_val = np.max(area_data)
+        min_val = np.min(data)
+        max_val = np.max(data)
 
-        normalised_data = (area_data-min_val)/(max_val - min_val)
-        grey_data = (normalised_data * 255).astype(np.uint8)
+        # Normalization
+        normalised_data = (data - min_val) / (max_val - min_val)
 
-        success = cv2.imwrite(save_path, grey_data.reshape(self.tile.ypixels, self.tile.xpixels))
+        # Check if we should return grey scale or color image
+        if if_grey:
+            # Create grey scale image
+            grey_data = (normalised_data * 255).astype(np.uint8)
 
-        if success:
-            print(f'grey image saved at {save_path}')
+            # Ensure the directory exists
+            directory = os.path.dirname(save_path)
+            if not os.path.exists(directory):
+                os.makedirs(directory)
+
+            # Save the grey scale image
+            success = cv2.imwrite(save_path, grey_data.reshape(self.tile.ypixels, self.tile.xpixels))
+
+            if success:
+                print(f'Grey image saved at {save_path}')
+            else:
+                print(f'Grey image not saved')
+
         else:
-            print(f'grey image not saved')
+            # Create a color image using a colormap
+            color_data = cv2.applyColorMap((normalised_data * 255).astype(np.uint8), cv2.COLORMAP_JET)
+
+            # Ensure the directory exists
+            directory = os.path.dirname(save_path)
+            if not os.path.exists(directory):
+                os.makedirs(directory)
+
+            # Save the color image
+            success = cv2.imwrite(save_path, color_data.reshape(self.tile.ypixels, self.tile.xpixels, 3))
+
+            if success:
+                print(f'Color image saved at {save_path}')
+            else:
+                print(f'Color image not saved')
+
 
 class MaskEditor:
 
@@ -415,7 +444,7 @@ class MaskEditor:
             xmin, xmax = sorted([x1, x2])
             ymin, ymax = sorted([y1, y2])
 
-            self.mask[ymin : ymax + 1, xmin : xmax + 1] = False
+            self.mask[ymin: ymax + 1, xmin: xmax + 1] = False
             self.history.append(self.mask.copy())
             self.clicks = []
 
@@ -429,10 +458,10 @@ class MaskEditor:
                 xmin, xmax = sorted([x1, x2])
                 ymin, ymax = sorted([y1, y2])
                 # Draw rectangle in red
-                display_image[ymin : ymax + 1, xmin] = [1, 0, 0]
-                display_image[ymin : ymax + 1, xmax] = [1, 0, 0]
-                display_image[ymin, xmin : xmax + 1] = [1, 0, 0]
-                display_image[ymax, xmin : xmax + 1] = [1, 0, 0]
+                display_image[ymin: ymax + 1, xmin] = [1, 0, 0]
+                display_image[ymin: ymax + 1, xmax] = [1, 0, 0]
+                display_image[ymin, xmin: xmax + 1] = [1, 0, 0]
+                display_image[ymax, xmin: xmax + 1] = [1, 0, 0]
 
             for x, y in self.clicks:
                 display_image[y, x] = [1, 0, 0]  # Mark clicks in red
@@ -467,19 +496,6 @@ class MaskEditor:
     def get_edited_mask(self):
         return self.mask.flatten()
 
-
     # def tissue_mask_creator(self):
 
     # def area_between(self):
-
-
-
-
-
-
-
-
-
-
-
-
