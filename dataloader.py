@@ -30,6 +30,7 @@ class Dataloader:
         self.data_frame = None
         self.tile = None
         self.tissue_mask_lst = []
+        self.annotation_label_mapping = None
         if not self.data_frame:
             print("please initialised data with load_file_directory")
 
@@ -71,17 +72,18 @@ class Dataloader:
 
     def groupby_data(self, patient_id=None, core_location=None, g_status=None):
         """
-        need to change this funciton to a more universal one by allowing user to pass a tuple containing groupby cols
+        Grouping the data based on the patient_id, core_location and g_status provided.
+        The user is then prompted if they want to exclude certain rows from the returned DataFrame.
+        The exclusions are based on the new patient_id, core_locations and G_status values entered by the user.
         """
+        # If no parameters are passed, the user is prompted to enter
         if not patient_id:
             patient_id = input('Provide patient id (strings: C00 + 4 digits):')
         if not core_location:
-            core_location = input('Provide core location (strings: S, Tm, T, B)')
+            core_location = input('Provide core location (strings: S, Tm, T, B):')
         if not g_status:
-            g_status = input(
-                'Provide g_status: (numerical values: 0: low, 1: high, 3: T_Tz, 4: met/met1, 5: met2, 6: met3)')
+            g_status = input('Provide g_status (numerical values: 0,1,3,4,5,6):')
 
-        # Collect the non-None inputs in a dictionary
         groupby_columns = []
         group_values = []
 
@@ -93,18 +95,58 @@ class Dataloader:
             group_values.append(core_location)
         if g_status:
             groupby_columns.append('G_status')
-            group_values.append(int(g_status))
+            try:
+                group_values.append(int(g_status))
+            except ValueError:
+                print("G_status should be an integer. Using as string.")
+                group_values.append(g_status)
 
-        # Check if there are any valid grouping columns and values
         if groupby_columns:
-            # Create the grouping and fetch the group
             print(f'\n ============The target dataframe group by {", ".join(groupby_columns)} =============')
-            target_df = self.data_frame.groupby(groupby_columns).get_group(tuple(group_values))
+            try:
+                target_df = self.data_frame.groupby(groupby_columns).get_group(tuple(group_values))
+            except KeyError:
+                print("No group found with these values. Please check your input.")
+                return None, groupby_columns, group_values
+
+            print("Original grouped dataframe:")
             print(target_df)
+
+            # Prompts the user if they want to delete some rows
+            drop_option = input("Do you want to drop some rows from this dataframe? (y/n): ").strip().lower()
+            if drop_option == "y":
+                print("Enter the union condition to be used to reject rows.Only rows that fulfil all of the following "
+                      "conditions at the same time will be eliminated, if you do not need a certain condition, please press enter.")
+                drop_patient = input("Enter patient id to drop (or press Enter to skip): ").strip()
+                drop_core = input("Enter core location to drop (or press Enter to skip): ").strip()
+                drop_g_status = input("Enter G_status to drop (or press Enter to skip): ").strip()
+
+                conditions = []
+                if drop_patient:
+                    conditions.append(target_df['patient_ID.'] == drop_patient)
+                if drop_core:
+                    conditions.append(target_df['core_locations'] == drop_core)
+                if drop_g_status:
+                    try:
+                        drop_g_status_int = int(drop_g_status)
+                        conditions.append(target_df['G_status'] == drop_g_status_int)
+                    except ValueError:
+                        print("G_status input is not a valid integer. Skipping drop for G_status.")
+
+                if conditions:
+                    # Only rows that satisfy all the conditions at the same time will be deleted from the dataframe
+                    combined_condition = conditions[0]
+                    for cond in conditions[1:]:
+                        combined_condition = combined_condition & cond
+                    target_df = target_df[~combined_condition]
+
+                print("Updated dataframe after dropping rows:")
+                print(target_df)
+
             return target_df, groupby_columns, group_values
         else:
-            print('※※※※※ Invalid input! ※※※※※')  # No valid grouping columns
-            return None
+            print('※※※※※ Invalid input! ※※※※※')
+            return None, [], []
 
     def load_pyir_data(self, path=None, core_id=None):
         """
@@ -146,12 +188,11 @@ class Dataloader:
         ax[1].set_title(f'Area intensity mask between {lower} and {upper} with threshold {threshold}')
         plt.draw()
         plt.pause(0.1)
-
         QApplication.processEvents()
 
         return intensity > threshold
 
-    def create_core_mask(self, lower=1600, upper=1700, data=None, wavn=None, threshold=1.5):
+    # def create_core_mask(self, lower=1600, upper=1700, data=None, wavn=None, threshold=1.5):
 
     def save_mask(self, mask, path):
         """
@@ -183,9 +224,9 @@ class Dataloader:
         normal_stroma_mask = np.all(img_data == [0, 255, 0], axis=1)
         annotation_mask_dict['normal stroma'] = normal_stroma_mask * tissue_mask
 
-        # # fibro stroma: (0, 255, 255) = Cyan
-        # cancer_stroma_mask = np.all(img_data == [0, 255, 255], axis=1)
-        # annotation_mask_dict['cancer stroma'] = cancer_stroma_mask * tissue_mask
+        # # fibro stroma: (255,192,203) = pink
+        # fibro_stroma_mask = np.all(img_data == [255,192,203], axis=1)
+        # annotation_mask_dict['fibro stroma'] = fibro_stroma_mask * tissue_mask
 
         # normal epithelium: (255, 0, 255) = purple
         normal_epithelium_mask = np.all(img_data == [255, 0, 255], axis=1)
@@ -197,11 +238,11 @@ class Dataloader:
 
         # cancer associated stroma: (0, 255, 255) = Cyan
         cancer_stroma_mask = np.all(img_data == [0, 255, 255], axis=1)
-        annotation_mask_dict['cancer stroma'] = cancer_stroma_mask * tissue_mask
+        annotation_mask_dict['cancer associated stroma'] = cancer_stroma_mask * tissue_mask
 
         # cancer epithelium Glut low: (255, 255, 0) = Yellow
         cancer_epi_glutL_mask = np.all(img_data == [255, 255, 0], axis=1)
-        annotation_mask_dict['Cancer epithelium Glut low'] = cancer_epi_glutL_mask * tissue_mask
+        annotation_mask_dict['cancer epithelium Glut low'] = cancer_epi_glutL_mask * tissue_mask
 
         # cancer epithelium Glut high: (255, 165, 0) = orange
         cancer_epi_glutH_mask = np.all(img_data == [255, 165, 0], axis=1)
@@ -317,76 +358,157 @@ class Dataloader:
 
     def make_grouped_labels(self, patient_id=None, core_location=None, g_status=None, sample_size=1000):
         """
-        Grouping the data based on the three values entered by the user (patient_id, core_location, G_status).
-        Call make_labels on each group to generate labels and return data and labels for all groups.
-        It also returns the group label for each group.
-        Regarding sampling: take a user-specified (sample_size) number of each class of each core at a time.
-        For example, stroma has 3987 pixels in patient C002419, if the sample_size is specified as
-        1000 the programme will randomly sample 1000 cases and iterate this operation for all results after groupby_data filtered data.
+        Group the data based on the input patient_id, core_location, and G_status, and then for each core within each group:
+          1. load the corresponding IR map, generate tissue mask, and load annotation. 2. count the number of pixels in each annotation of the core.
+          2. count the number of pixels in each annotation for that core. 3.
+          3. summarise the global number of annotations in all cores. 4.
+          4. calculate the number of samples for each annotation in each core based on the global number and the number of cores:
+                desired_num = round(target_number_of_samples * (number of pixels of that annotation in that core / number of pixels of that annotation globally))
+          5. For each annotation in each core, randomly sample according to the calculated number of samples.
+          6. finally merge the sampling data and labels of all cores.
+
+        Return: final_data, final_label, grouped_keys
         """
         if self.data_frame is None:
             raise ValueError("call load_file_directory first to load the dataframe")
 
         grouped_df, group_columns, grouped_keys = self.groupby_data(patient_id, core_location, g_status)
 
-        annotated_data_cache = []
-        labels_cache = []
-
+        # Extraction of grouped information
         annotation_path_arr = grouped_df['ir_annotation_img_direction'].values
         ir_path_arr = grouped_df['ir_img_direction'].values
         g_status_arr = grouped_df['G_status'].values
         core_location_arr = grouped_df['core_locations'].values
         patient_id_arr = grouped_df['patient_ID.'].values
 
+        # Used to store information about each core: including annotation mask, counts for each category, and loaded spectral data
+        grouped_cores = []
+
+        # First loop: iterate each core, generates masks, loads annotations, and counts the number of pixels in each annotation
         for i in range(len(annotation_path_arr)):
-            print(f'Proceed to annotation No.{i + 1} from the grouped dataframe {grouped_keys} above.....')
+            print(f'\nProcessing core {i+1} of group {grouped_keys} ...')
             if pd.isnull(annotation_path_arr[i]) or pd.isnull(ir_path_arr[i]):
-                print(f'No annotation/ir image path found in No.{i + 1} annotation!')
+                print(f'No annotation/IR image path found for core {i+1}, skip.')
                 continue
+            # Load IR data and store spectral data (core_data)
             self.load_pyir_data(ir_path_arr[i])
-            print(f'Creating mask for {patient_id_arr[i]}, {core_location_arr[i]}, {g_status_arr[i]} IR image....')
-            _ = 1.5
+            core_data = self.data.copy()  # store spectral data for the current core
+
+            print(f'Creating mask for patient {patient_id_arr[i]}, core location {core_location_arr[i]}, G_status {g_status_arr[i]} ...')
+            threshold = 1.5
             while True:
-                tissue_mask = self.create_mask(threshold=_)
-                a = input('Good with this mask? (y/n): ')
-                if a == 'y':
+                tissue_mask = self.create_mask(threshold=threshold)
+                user_resp = input('Is this mask acceptable? (y/n): ').strip().lower()
+                if user_resp == 'y':
                     self.tissue_mask_lst.append(tissue_mask)
                     break
-                elif a == 'n':
-                    _ = float(input('New threshold: '))
+                elif user_resp == 'n':
+                    threshold = float(input('Enter new threshold: '))
 
-            print(
-                f'\n\n============ making label for {patient_id_arr[i]}, {core_location_arr[i]}, {g_status_arr[i]} ============')
-            print(f'↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓')
-            annotated_index, labels = self.make_labels(annotation_path_arr[i], tissue_mask=tissue_mask
-                                                       , sample_size=sample_size)
-            if annotated_index is None or labels is None:
-                print(f"Warning: No valid data returned for annotation {annotation_path_arr[i]}")
-                continue
+            # Loads the annotation and counts the number of pixels in each annotation
+            annotation_mask_dict = self.load_annotation(annotation_path_arr[i], tissue_mask)
+            annotation_counts = {}
+            for ann, mask in annotation_mask_dict.items():
+                count = int(mask.sum())
+                annotation_counts[ann] = count
+                print(f'Core {i+1}, annotation "{ann}" count: {count}')
 
-            zeros = np.zeros(self.ypx * self.xpx)
-            for m in np.unique(labels):  # labels should be integer
-                zeros[annotated_index[np.where(labels == m)]] = m + 1
-            plt.figure()
-            plt.imshow(zeros.reshape(self.ypx, self.xpx))
-            plt.title(f'labeling from {patient_id_arr[i]}, {core_location_arr[i]}, {g_status_arr[i]}')
-            plt.show(block=False)
+            grouped_cores.append({
+                'core_index': i,
+                'annotation_mask_dict': annotation_mask_dict,
+                'annotation_counts': annotation_counts,
+                'core_data': core_data,
+                'patient_id': patient_id_arr[i],
+                'core_location': core_location_arr[i],
+                'g_status': g_status_arr[i]
+            })
 
-            annotated_data = self.data[annotated_index]
-            annotated_data_cache.append(annotated_data)
-            labels_cache.append(labels)
+        # Aggregate the number of global pixels for each annotation in the whole group.
+        global_annotation_counts = {}
+        for core in grouped_cores:
+            for ann, count in core['annotation_counts'].items():
+                global_annotation_counts[ann] = global_annotation_counts.get(ann, 0) + count
 
-        print(
-            '\n=============MAKE GROUPED LABEL END. Output: core annotated DATA, core LABELS, GROUPED KEYS=============')
+        print("\nGlobal annotation counts for the group:")
+        for ann, count in global_annotation_counts.items():
+            print(f'  {ann}: {count}')
+
+        # To ensure that the global sampling of each annotation reaches the target (sample_size), here for each annotation, the
+        # If the global pixel count is less than the target sample count, then the target sample count is the global pixel count; otherwise take sample_size.
+        # Then allocate the number of samples in proportion to each core.
+        # For each core, random sampling is performed within each annotation.
+        for core in grouped_cores:
+            sampled_indices = {}  # Stores the sample index of each annotation
+            for ann, mask in core['annotation_mask_dict'].items():
+                count = core['annotation_counts'][ann]
+                if count == 0:
+                    continue
+                global_count = global_annotation_counts[ann]
+                target_total = sample_size if global_count >= sample_size else global_count
+                # Proportionally compute the number of samples for this annotation in the core
+                desired_num = int(round(target_total * (count / global_count)))
+                # 如果用户指定的 sample_size 大于该核心实际数量，且按比例计算结果低于 sample_size，则询问是否进行上采样
+                if sample_size > count and desired_num < sample_size:
+                    response = input(f'For core {core["core_index"]+1}, annotation "{ann}": available count is {count} but target is {sample_size}. Do you want to oversample to reach {sample_size}? (y/n): ').strip().lower()
+                    if response == 'y':
+                        desired_num = sample_size
+                # 之后如果 desired_num 超过实际数量，则使用 replace=True 允许重复抽样，否则直接采样
+                if desired_num > count:
+                    sampled_idx = self.random_sampling_from_mask(mask, sample_size=desired_num, replace=True)
+                else:
+                    sampled_idx = self.random_sampling_from_mask(mask, sample_size=desired_num, replace=False)
+                sampled_indices[ann] = sampled_idx
+            core['sampled_indices'] = sampled_indices
+
+        # Create a mapping of annotations to labels (in alphabetical order to ensure consistency)
+        all_annotations = set()
+        for core in grouped_cores:
+            all_annotations.update(core['annotation_mask_dict'].keys())
+        annotation_to_label = {ann: idx for idx, ann in enumerate(sorted(all_annotations))}
+        print("\nAnnotation to label mapping:")
+        print(annotation_to_label)
+
+
+        # Create a mapping of annotations to labels (in alphabetical order to ensure consistency)
+        all_annotations = set()
+        for core in grouped_cores:
+            all_annotations.update(core['annotation_mask_dict'].keys())
+        annotation_to_label = {ann: idx for idx, ann in enumerate(sorted(all_annotations))}
+        print("\nAnnotation to label mapping:")
+        self.annotation_label_mapping = annotation_to_label
+        print(annotation_to_label)
+
+        # Finally, the data and labels corresponding to the indexes obtained from sampling in all cores are aggregated
+        annotated_data_cache = []
+        labels_cache = []
+        for core in grouped_cores:
+            for ann, indices in core['sampled_indices'].items():
+                if len(indices) == 0:
+                    continue
+                # Sampling data from the current core of spectral data
+                core_samples = core['core_data'][indices]
+                annotated_data_cache.append(core_samples)
+                label_val = annotation_to_label[ann]
+                labels_cache.append(np.full(len(indices), label_val))
+
+                # Optional: show current core sampling (if visualisation is required)
+                zeros = np.zeros(self.ypx * self.xpx)
+                zeros[indices] = label_val + 1  # In order to display not all zeros
+                plt.figure()
+                plt.imshow(zeros.reshape(self.ypx, self.xpx))
+                plt.title(f'Core {core["core_index"]+1}: annotation "{ann}" label {label_val}')
+                plt.show(block=False)
+                # plt.pause(3)
+                # plt.close()
+
         if len(annotated_data_cache) > 0:
             final_data = np.vstack(annotated_data_cache)
             final_label = np.hstack(labels_cache)
-
-            print(f'※※※※※ Grouped by {group_columns}, sample size of each label: {sample_size} ※※※※※\n')
-
+            print(f'\nGrouped by {group_columns}, with representative sampling per core. Target sample size per annotation: {sample_size}')
             return final_data, final_label, tuple(grouped_keys)
         else:
-            print('※※※※※ No annotated data and labels in the caches, check if annotation exists on images! Returning None. ※※※※※')
+            print('※※※※※ No annotated data was obtained, please check the annotations! ※※※※※')
+            return None, None
 
     @staticmethod
     def disp_png(path):
@@ -407,5 +529,26 @@ class Dataloader:
             if key == 13:  # The ASCII code of the Enter key is 13.
                 break
         cv2.destroyAllWindows()
+
+    def mean_spectra_from_class(self):
+        """
+        This method displays the mean spectra/and binary mask of specific class/label from rebuild images. Such image should be a 1-D array
+        For example, if k-means labels image has label 1,2,3,4,5, this function would return mean spectra for user specified
+        label and the mask of corresponding label.
+
+        This method also works on prediction output (y_pred) and other 1-d array.
+
+        Parameters:
+            label_arr: 1-D numpy array of which the size is the same as tissue data array
+            to_disp: List. a list of labels needs to be display
+            ypx: y pixels
+            xpx: x pixels
+            tissue_mask: binary 1-D numpy array. tissue mask for labelled data
+            return_mask: True/False. Defualt: False.
+        Returns:
+            mean_spectra: a 1-D/2-D numpy array of mean spectra corresponding to the labels in the to_disp list.
+            label_mask : return if return_mask is True. A 1-D/2-D binary numpy array corresponding to the labels in the to_disp list.
+        """
+
 
 
